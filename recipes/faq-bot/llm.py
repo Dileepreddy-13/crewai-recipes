@@ -16,6 +16,19 @@ from crewai import LLM
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 DEFAULT_MODEL = "meta/llama-3.1-8b-instruct"
 MAX_RETRIES = 3
+DEFAULT_TIMEOUT = 120.0
+
+
+def get_timeout() -> float:
+    """Return the per-request LLM timeout in seconds (env LLM_TIMEOUT, default 120).
+
+    A missing, non-numeric or non-positive value falls back to the default.
+    """
+    try:
+        timeout = float(os.getenv("LLM_TIMEOUT", DEFAULT_TIMEOUT))
+    except ValueError:
+        return DEFAULT_TIMEOUT
+    return timeout if timeout > 0 else DEFAULT_TIMEOUT
 
 
 def get_llm(provider: Optional[str] = None) -> LLM:
@@ -32,7 +45,8 @@ def get_llm(provider: Optional[str] = None) -> LLM:
             If None, checks the LLM_PROVIDER environment variable (default: "primary").
 
     Returns:
-        An LLM instance configured for the selected provider with retries enabled.
+        An LLM instance configured for the selected provider with retries enabled
+        and a per-request timeout (LLM_TIMEOUT seconds, default 120).
 
     Raises:
         EnvironmentError: If required API keys are missing.
@@ -93,4 +107,5 @@ def get_llm(provider: Optional[str] = None) -> LLM:
         temperature=0.2,
         max_tokens=2048,
         max_retries=MAX_RETRIES,
+        timeout=get_timeout(),
     )

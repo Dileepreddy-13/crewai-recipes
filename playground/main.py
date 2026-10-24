@@ -17,6 +17,11 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+try:
+    from rate_limiter import SlidingWindowRateLimiter, get_client_ip
+except ImportError:
+    from playground.rate_limiter import SlidingWindowRateLimiter, get_client_ip
+
 load_dotenv()
 
 logging.basicConfig(
@@ -27,6 +32,29 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="CrewAI Recipes Playground")
 
 RECIPES_DIR = Path(__file__).parent.parent / "recipes"
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """True if exc, or anything in its cause chain, is an LLM request timeout."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if "timeout" in type(exc).__name__.lower() or "timed out" in str(exc).lower():
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def timeout_message() -> str:
+    """Actionable error text for a timed out LLM call."""
+    raw = os.getenv("LLM_TIMEOUT", "")
+    try:
+        seconds = float(raw)
+        if seconds <= 0:
+            raise ValueError
+    except ValueError:
+        seconds = 120.0
+    return f"LLM call timed out after {seconds:g}s, try again, or raise LLM_TIMEOUT"
 
 
 class RunRequest(BaseModel):
@@ -71,6 +99,7 @@ class ResponseCache:
 
 
 response_cache = ResponseCache(maxsize=100)
+rate_limiter = SlidingWindowRateLimiter()
 
 
 class ThreadSafeStreamRedirector:
@@ -158,6 +187,15 @@ def cleanup_recipe_modules(
             sys.modules.pop(key, None)
 
 
+@app.get("/health")
+def health() -> dict:
+    """Liveness endpoint. Returns the number of discovered recipes."""
+    if not RECIPES_DIR.exists():
+        return {"status": "ok", "recipes": 0, "recipe_names": []}
+    recipes = [p.name for p in RECIPES_DIR.iterdir() if p.is_dir()]
+    return {"status": "ok", "recipes": len(recipes), "recipe_names": sorted(recipes)}
+
+
 @app.get("/recipes")
 def list_recipes():
     recipes = []
@@ -179,7 +217,16 @@ def list_recipes():
 
 
 @app.post("/run")
-def run_recipe(req: RunRequest):
+def run_recipe(req: RunRequest, request: Request):
+    client_ip = get_client_ip(request)
+    allowed, retry_after = rate_limiter.is_allowed(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     start_time = time.time()
 
     sanitized_inputs = {
@@ -258,6 +305,8 @@ def run_recipe(req: RunRequest):
                     status_code=401,
                     detail="API Key is missing. Please check your .env file.",
                 )
+            if is_timeout_error(e):
+                raise HTTPException(status_code=504, detail=timeout_message())
             raise HTTPException(status_code=500, detail=f"Execution error: {err_str}")
 
     finally:
@@ -379,6 +428,8 @@ def execute_recipe_stream(
                         "error": "API Key is missing. Please check your .env file.",
                     }
                 )
+            elif is_timeout_error(e):
+                push_event({"type": "error", "error": timeout_message()})
             else:
                 push_event({"type": "error", "error": f"Execution error: {err_str}"})
 
@@ -390,6 +441,15 @@ def execute_recipe_stream(
 @app.post("/run/stream")
 async def run_recipe_stream(req: RunRequest, request: Request):
     """Server-Sent Events (SSE) endpoint to stream CrewAI execution progress in real time."""
+    client_ip = get_client_ip(request)
+    allowed, retry_after = rate_limiter.is_allowed(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     if not (req.no_cache or req.bypass_cache):
         cached_output = response_cache.get(req.recipe, req.inputs)
         if cached_output is not None:
@@ -447,6 +507,15 @@ async def run_recipe_stream(req: RunRequest, request: Request):
 @app.websocket("/run/ws")
 async def run_recipe_ws(websocket: WebSocket):
     """WebSocket endpoint to stream CrewAI execution progress in real time."""
+    client_ip = get_client_ip(websocket)
+    allowed, retry_after = rate_limiter.is_allowed(client_ip)
+    if not allowed:
+        await websocket.close(
+            code=1008,
+            reason=f"Rate limit exceeded. Retry after {retry_after}s.",
+        )
+        return
+
     await websocket.accept()
     loop = asyncio.get_running_loop()
     queue = asyncio.Queue()
