@@ -158,6 +158,15 @@ def cleanup_recipe_modules(
             sys.modules.pop(key, None)
 
 
+@app.get("/health")
+def health() -> dict:
+    """Liveness endpoint. Returns the number of discovered recipes."""
+    if not RECIPES_DIR.exists():
+        return {"status": "ok", "recipes": 0, "recipe_names": []}
+    recipes = [p.name for p in RECIPES_DIR.iterdir() if p.is_dir()]
+    return {"status": "ok", "recipes": len(recipes), "recipe_names": sorted(recipes)}
+
+
 @app.get("/recipes")
 def list_recipes():
     recipes = []

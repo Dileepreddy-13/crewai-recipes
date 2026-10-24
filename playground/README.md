@@ -24,3 +24,21 @@ A local, lightweight web interface to test your recipes. **This runs entirely on
    uvicorn main:app --reload
    ```
 5. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser.
+
+## API
+
+### `GET /health`
+
+Liveness probe endpoint. Returns service health status and discovered recipes:
+
+```json
+{
+  "status": "ok",
+  "recipes": 12,
+  "recipe_names": [
+    "_template",
+    "appointment-booking",
+    "..."
+  ]
+}
+```

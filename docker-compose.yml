@@ -40,6 +40,12 @@ services:
       - "8000:8000"
     # Restart automatically if the server crashes
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   # ----------------------------------------------------------
   # Recipe — CLI runner for a single recipe
