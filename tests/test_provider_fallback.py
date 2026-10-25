@@ -13,9 +13,16 @@ if "crewai" not in sys.modules:
 
     # Mock LLM constructor to return an object with assigned attributes
     def mock_llm_init(
-        model, base_url, api_key, temperature=0.2, max_tokens=2048, max_retries=3
+        model,
+        base_url,
+        api_key,
+        temperature=0.2,
+        max_tokens=2048,
+        max_retries=3,
+        timeout=None,
     ):
         mock_obj = MagicMock()
+        mock_obj.timeout = timeout
         mock_obj.model = model
         mock_obj.base_url = base_url
         mock_obj.api_key = api_key
@@ -96,6 +103,32 @@ def test_missing_keys_raises_environment_error() -> None:
             assert "primary-key" not in str(e)
             assert "fallback-key" not in str(e)
         assert failed, "Expected EnvironmentError when no keys are configured"
+
+
+def _timeout_passed_to_llm(env: dict) -> float:
+    import llm as llm_module
+
+    with patch.dict(os.environ, {"LLM_API_KEY": "k", **env}, clear=True):
+        with patch.object(llm_module, "LLM") as fake_llm:
+            get_llm()
+    return fake_llm.call_args.kwargs["timeout"]
+
+
+def test_timeout_defaults_to_120_seconds() -> None:
+    """LLM_TIMEOUT unset: the request timeout is 120s."""
+    assert _timeout_passed_to_llm({}) == 120.0
+
+
+def test_timeout_read_from_env() -> None:
+    """LLM_TIMEOUT overrides the default."""
+    assert _timeout_passed_to_llm({"LLM_TIMEOUT": "30"}) == 30.0
+
+
+def test_invalid_timeout_falls_back_to_default() -> None:
+    """Junk or non-positive LLM_TIMEOUT values do not break get_llm()."""
+    assert _timeout_passed_to_llm({"LLM_TIMEOUT": "soon"}) == 120.0
+    assert _timeout_passed_to_llm({"LLM_TIMEOUT": "0"}) == 120.0
+    assert _timeout_passed_to_llm({"LLM_TIMEOUT": "-5"}) == 120.0
 
 
 if __name__ == "__main__":

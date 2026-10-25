@@ -81,6 +81,7 @@ python run.py --name "Priya Sharma" \
 | `--meeting-type` | ✅ Yes | — | Type of meeting requested (e.g., "Product Demo") |
 | `--preferred-times` | ✅ Yes | — | Preferred days/times stated by the requester |
 | `--notes` | No | `None` | Optional context or special requests |
+| `--verbose` | No | `False` | Enable verbose CrewAI execution trace |
 | `--help` | No | — | Show help and exit |
 
 ---
@@ -105,7 +106,7 @@ Subject: Product Demo - Slot Options for Priya Sharma
 
 Hi Priya,
 
-Thank you for requesting a 30-minute Product Demo for your 15-person team! 
+Thank you for requesting a 30-minute Product Demo for your 15-person team!
 Based on your preference for a morning slot this week, here are a few options:
 
 1. Monday 14 Jul 2026 — 10:00 AM IST (30 min)
