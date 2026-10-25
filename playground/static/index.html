@@ -1368,6 +1368,24 @@
             overflow: visible;
         }
 
+        /* ═══ Result stats footer (#173) ═══ */
+        .result-footer {
+            display: none;
+            align-items: center;
+            flex-wrap: wrap;
+            padding: 10px 18px;
+            border-top: 1px solid var(--border-soft);
+            background: var(--surface-color);
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            line-height: 1.5;
+            font-family: var(--font-main);
+        }
+
+        .result-footer.visible {
+            display: flex;
+        }
+
         /* empty result state */
         .result-empty {
             display: flex;
@@ -1770,6 +1788,7 @@
                 <button class="copy-btn" id="copy-result-btn" style="display: none;" title="Copy result to clipboard">Copy</button>
             </div>
             <div id="result" class="result-body is-empty"></div>
+            <div id="result-footer" class="result-footer" style="display: none;"></div>
         </div>
     </section>
 
@@ -1989,6 +2008,7 @@
     const errorMsg        = document.getElementById('error-msg');
     const cachedBadge     = document.getElementById('cached-badge');
     const copyResultBtn   = document.getElementById('copy-result-btn');
+    const resultFooter    = document.getElementById('result-footer');
 
     const progressCard      = document.getElementById('progress-card');
     const progressStream    = document.getElementById('progress-stream');
@@ -2113,6 +2133,49 @@
 
     function showCopyResultBtn() {
         if (copyResultBtn) copyResultBtn.style.display = 'inline-block';
+    }
+
+    function clearResultStats() {
+        if (resultFooter) {
+            resultFooter.textContent = '';
+            resultFooter.classList.remove('visible');
+            resultFooter.style.display = 'none';
+        }
+    }
+
+    function renderResultStats(latencySeconds, usage) {
+        if (!resultFooter) return;
+        const parts = [];
+
+        if (typeof latencySeconds === 'number' && !isNaN(latencySeconds)) {
+            parts.push(`⏱ ${latencySeconds.toFixed(1)}s`);
+        } else if (latencySeconds) {
+            const num = parseFloat(latencySeconds);
+            parts.push(isNaN(num) ? `⏱ ${latencySeconds}` : `⏱ ${num.toFixed(1)}s`);
+        }
+
+        if (usage && typeof usage === 'object') {
+            const total = Number(usage.total_tokens || 0);
+            const prompt = Number(usage.prompt_tokens || 0);
+            const completion = Number(usage.completion_tokens || 0);
+            const calls = Number(usage.successful_requests || 0);
+
+            if (total > 0 || prompt > 0 || completion > 0) {
+                parts.push(`🔢 ${total.toLocaleString()} tokens (prompt: ${prompt.toLocaleString()} · completion: ${completion.toLocaleString()})`);
+            }
+
+            if (calls > 0) {
+                parts.push(`✅ ${calls} LLM call${calls === 1 ? '' : 's'}`);
+            }
+        }
+
+        if (parts.length > 0) {
+            resultFooter.textContent = parts.join('   ·   ');
+            resultFooter.classList.add('visible');
+            resultFooter.style.display = 'flex';
+        } else {
+            clearResultStats();
+        }
     }
 
     function setOutput(text, badge) {
@@ -2417,6 +2480,7 @@
         }, 50);
 
         setOutput(item.output || '', 'TEXT');
+        clearResultStats();
         if (item.output) {
             showCopyResultBtn();
         } else {
@@ -2773,6 +2837,7 @@
                 if (cachedBadge) {
                     cachedBadge.style.display = event.cached ? 'inline-flex' : 'none';
                 }
+                renderResultStats(event.latency_seconds, event.usage);
 
                 // Record run in session history (#71)
                 const durationMs = currentRunStartTime ? (Date.now() - currentRunStartTime) : 0;
@@ -2796,6 +2861,7 @@
                 showError(event.error);
                 setOutput('The run failed — check the activity feed for details.', 'TEXT');
                 hideCopyResultBtn();
+                clearResultStats();
                 if (cachedBadge) {
                     cachedBadge.style.display = 'none';
                 }
@@ -2864,6 +2930,7 @@
         resetTimeline();
         tlEmpty.style.display = 'none';
         stopBtn.classList.add('visible');
+        clearResultStats();
         resultPanel.innerHTML = '<div class="stream-loading"><div class="shimmer-line"></div><div class="shimmer-line"></div><div class="shimmer-line"></div><div class="shimmer-line"></div></div>';
         resultPanel.classList.remove('is-empty');
         resultPanel._rawText = '';
@@ -2884,6 +2951,7 @@
                 showError(errData.detail || 'Failed to start streaming execution.');
                 setOutput('The run could not be started: ' + (errData.detail || 'server error'), 'TEXT');
                 hideCopyResultBtn();
+                clearResultStats();
                 stopTimer();
                 setActivityStatus('failed', 'Failed');
                 return;
@@ -2926,6 +2994,7 @@
                 showError("Network error while streaming progress. Is the backend running?");
                 setOutput('The run failed — check that the backend is running.', 'TEXT');
                 hideCopyResultBtn();
+                clearResultStats();
             }
         } finally {
             runBtn.disabled = false;
@@ -2952,6 +3021,19 @@
     loadRecipes();
     renderHistory();
     setOutput('', 'TEXT');
+    clearResultStats();
+
+    // Hook up clear-output button (if landed or added dynamically) (#173)
+    const clearOutputBtn = document.getElementById('clear-output');
+    if (clearOutputBtn) {
+        clearOutputBtn.addEventListener('click', clearResultStats);
+    }
+    document.addEventListener('click', (e) => {
+        if (e.target && (e.target.id === 'clear-output' || (e.target.closest && e.target.closest('#clear-output, .clear-output-btn')))) {
+            clearResultStats();
+        }
+    });
+
     resultPanel.innerHTML = `
         <div class="result-empty">
             <div class="tl-empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg></div>

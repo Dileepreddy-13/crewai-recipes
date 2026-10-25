@@ -158,6 +158,45 @@ def cleanup_recipe_modules(
             sys.modules.pop(key, None)
 
 
+def extract_usage_metrics(crew: object, result: object = None) -> dict | None:
+    """Extract usage metrics dict safely from a crew instance or kickoff result.
+
+    Falls back to None if unpopulated or if an error occurs.
+    """
+    try:
+        raw = getattr(crew, "usage_metrics", None)
+        if (
+            raw is None or getattr(raw, "__class__", type(raw)).__name__.endswith("Mock")
+        ) and result is not None:
+            res_usage = getattr(result, "usage_metrics", None)
+            if res_usage is not None and not getattr(
+                res_usage, "__class__", type(res_usage)
+            ).__name__.endswith("Mock"):
+                raw = res_usage
+
+        if raw is None or getattr(raw, "__class__", type(raw)).__name__.endswith("Mock"):
+            return None
+
+        if callable(raw):
+            raw = raw()
+
+        if hasattr(raw, "model_dump") and callable(raw.model_dump):
+            raw = raw.model_dump()
+        elif hasattr(raw, "dict") and callable(raw.dict):
+            raw = raw.dict()
+
+        if isinstance(raw, dict) and raw:
+            return {
+                "total_tokens": int(raw.get("total_tokens", 0)),
+                "prompt_tokens": int(raw.get("prompt_tokens", 0)),
+                "completion_tokens": int(raw.get("completion_tokens", 0)),
+                "successful_requests": int(raw.get("successful_requests", 0)),
+            }
+        return None
+    except Exception:
+        return None
+
+
 @app.get("/health")
 def health() -> dict:
     """Liveness endpoint. Returns the number of discovered recipes."""
@@ -209,7 +248,12 @@ def run_recipe(req: RunRequest):
             logger.info(
                 f"Recipe '{req.recipe}' returned cached result (bypassed LLM call)"
             )
-            return {"output": cached_output, "cached": True}
+            return {
+                "output": cached_output,
+                "cached": True,
+                "latency_seconds": 0.0,
+                "usage": None,
+            }
 
     if not os.getenv("LLM_API_KEY") and not os.getenv("NVIDIA_API_KEY"):
         logger.error(
@@ -248,14 +292,23 @@ def run_recipe(req: RunRequest):
             )
         try:
             crew = module.build_crew(**req.inputs)
+            start_perf = time.perf_counter()
             result = crew.kickoff()
+            latency_seconds = round(time.perf_counter() - start_perf, 2)
+            usage = extract_usage_metrics(crew, result)
+
             output_str = str(result)
             response_cache.set(req.recipe, req.inputs, output_str)
             exec_time = time.time() - start_time
             logger.info(
                 f"Recipe '{req.recipe}' completed successfully in {exec_time:.2f}s"
             )
-            return {"output": output_str, "cached": False}
+            return {
+                "output": output_str,
+                "cached": False,
+                "latency_seconds": latency_seconds,
+                "usage": usage,
+            }
         except Exception as e:
             exec_time = time.time() - start_time
             err_str = str(e)
@@ -367,12 +420,21 @@ def execute_recipe_stream(
             redirector = ThreadSafeStreamRedirector(old_stdout, log_cb)
             sys.stdout = redirector
             try:
+                start_perf = time.perf_counter()
                 result = crew.kickoff()
+                latency_seconds = round(time.perf_counter() - start_perf, 2)
+                usage = extract_usage_metrics(crew, result)
                 output_str = str(result)
                 response_cache.set(recipe_name, inputs, output_str)
                 if not stop_event.is_set():
                     push_event(
-                        {"type": "complete", "output": output_str, "cached": False}
+                        {
+                            "type": "complete",
+                            "output": output_str,
+                            "cached": False,
+                            "latency_seconds": latency_seconds,
+                            "usage": usage,
+                        }
                     )
             finally:
                 sys.stdout = old_stdout
@@ -407,7 +469,7 @@ async def run_recipe_stream(req: RunRequest, request: Request):
             async def cached_event_generator():
                 yield f"data: {json.dumps({'type': 'start', 'recipe': req.recipe, 'cached': True})}\n\n"
                 yield f"data: {json.dumps({'type': 'log', 'text': '⚡ Serving cached result (bypassed LLM call)'})}\n\n"
-                yield f"data: {json.dumps({'type': 'complete', 'output': cached_output, 'cached': True})}\n\n"
+                yield f"data: {json.dumps({'type': 'complete', 'output': cached_output, 'cached': True, 'latency_seconds': 0.0, 'usage': None})}\n\n"
 
             return StreamingResponse(
                 cached_event_generator(), media_type="text/event-stream"
@@ -483,7 +545,13 @@ async def run_recipe_ws(websocket: WebSocket):
                     }
                 )
                 await websocket.send_json(
-                    {"type": "complete", "output": cached_output, "cached": True}
+                    {
+                        "type": "complete",
+                        "output": cached_output,
+                        "cached": True,
+                        "latency_seconds": 0.0,
+                        "usage": None,
+                    }
                 )
                 return
 
